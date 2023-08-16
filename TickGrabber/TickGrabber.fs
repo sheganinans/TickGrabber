@@ -73,7 +73,7 @@ let sendAlert =
         |> Async.AwaitTask
         |> Async.Ignore
     }
-    
+
 let client_id = Environment.GetEnvironmentVariable "CTRADER_API_CLIENT_ID"
 let client_secret = Environment.GetEnvironmentVariable "CTRADER_API_CLIENT_SECRET"
 let access_token = Environment.GetEnvironmentVariable "CTRADER_API_CLIENT_ACCESS_TOKEN"
@@ -104,6 +104,10 @@ let client =
 
 Thread.Sleep 100
 
+if not (Directory.Exists repoPath)
+then Directory.CreateDirectory repoPath |> ignore
+
+
 if not (File.Exists $"{repoPath}/finished.txt")
 then
   let f = File.Create $"{repoPath}/finished.txt"
@@ -132,8 +136,7 @@ let symbolInfo =
   task {
     let mutable info = [||]
 
-    sub client (fun (rsp : ProtoOASymbolByIdRes) ->
-      info <- rsp.Symbol |> Seq.toArray) |> ignore
+    sub client (fun (rsp : ProtoOASymbolByIdRes) -> info <- rsp.Symbol |> Seq.toArray) |> ignore
 
     let req = ProtoOASymbolByIdReq ()
     req.CtidTraderAccountId <- acc_id
@@ -157,6 +160,7 @@ type GrabReq =
   | OffsetBy of int64
 
 let grabber =
+  let req = ProtoOAGetTickDataReq ()
   MailboxProcessor.Start (fun inbox ->
     let rec loop () =
       async {
@@ -165,7 +169,6 @@ let grabber =
         | NewDay -> endFilter <- int64 (date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
         | OffsetBy t -> endFilter <- t
 
-        let req = ProtoOAGetTickDataReq ()
         req.CtidTraderAccountId <- acc_id
         req.SymbolId <- symbolId
         req.FromTimestamp <- int64 (date.Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
@@ -176,7 +179,7 @@ let grabber =
           {DateTimeOffset.FromUnixTimeMilliseconds req.ToTimestamp}"""
 
         // backpressure: api limit is 5 req/sec.
-        do! Async.Sleep 100
+        do! Async.Sleep 120
         client.SendMessage req |> Async.AwaitTask |> Async.RunSynchronously
         Async.Start (sendAlert (), tokenSource.Token)
         return! loop ()
@@ -208,7 +211,7 @@ let symbolMgr =
       }
     loop ())
 
-let mutable data : {| Tick : float; Timestamp:int64 |} [] = [||]
+let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
 let saver =
   MailboxProcessor.Start (fun inbox ->
@@ -228,6 +231,8 @@ let saver =
           |> Array.map snd
         use w = rowGroup.NextColumn().LogicalWriter<int64>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Timestamp))
         use w = rowGroup.NextColumn().LogicalWriter<float>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Tick))
+        file.Close ()
+        file.Dispose ()
         printfn $"~~~\n{filePath}\n~~~\nsaved\n~~~"
         data <- [||]
         if date = lastDay
@@ -279,4 +284,4 @@ sub client onTickData |> ignore
 symbolMgr.Post (Init symbols)
 symbolMgr.Post Next
 
-while true do Thread.Sleep 60_000
+Thread.Sleep (60_000 * 3)
