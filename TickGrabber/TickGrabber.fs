@@ -251,13 +251,13 @@ let saver =
           data <- [||]
           if date = lastDay
           then
-            let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
             addFile $"{repoPath}/finished.txt"
             let d = $"{repoPath}/{symbolId}"
             addDir d
             commit d
             push ()
             delDir d
+            let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
             date <- firstDay
             symbolMgr.Post Next
           else
