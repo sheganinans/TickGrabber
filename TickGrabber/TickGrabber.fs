@@ -148,7 +148,6 @@ let symbolInfo =
     return info |> Array.map (fun s -> s.SymbolId, s) |> Map.ofArray
   } |> Async.RunSynchronously
 
-let firstDay = DateTime (2023, 7, 28)
 let lastDay = DateTime (2023, 8, 1)
 let mutable date = firstDay
 let mutable symbol = ""
