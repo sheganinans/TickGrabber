@@ -36,7 +36,9 @@ let commit (dir : string) =
   printfn "commit"
   use repo = new Repository (repoPath)
   let signature = Signature ("upload bot", "sheganinans@gmail.com", DateTimeOffset.Now)
-  repo.Commit ($"added: {dir[repoPath.Length+1..]}", signature, signature) |> ignore
+  try
+    repo.Commit ($"added: {dir[repoPath.Length+1..]}", signature, signature) |> ignore
+  with _ -> printfn "nothing to commit."
 
 let creds =
   let c = UsernamePasswordCredentials ()
