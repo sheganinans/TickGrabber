@@ -290,4 +290,4 @@ sub client onTickData |> ignore
 symbolMgr.Post (Init symbols)
 symbolMgr.Post Next
 
-Thread.Sleep (60_000 * 3)
+Thread.Sleep -1
