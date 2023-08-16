@@ -218,8 +218,8 @@ let saver =
         if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
         let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
         let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
-        let file = @$"{repoPath}/{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
-        use file = new ParquetFileWriter (file, cols)
+        let filePath = @$"{repoPath}/{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
+        use file = new ParquetFileWriter (filePath, cols)
         use rowGroup = file.AppendRowGroup ()
         let dataDedup =
           data
@@ -228,7 +228,7 @@ let saver =
           |> Array.map snd
         use w = rowGroup.NextColumn().LogicalWriter<int64>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Timestamp))
         use w = rowGroup.NextColumn().LogicalWriter<float>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Tick))
-        printfn $"~~~\n{file}\n~~~\nsaved\n~~~"
+        printfn $"~~~\n{filePath}\n~~~\nsaved\n~~~"
         data <- [||]
         if date = lastDay
         then
