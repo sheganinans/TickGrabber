@@ -176,7 +176,7 @@ let grabber =
           {DateTimeOffset.FromUnixTimeMilliseconds req.ToTimestamp}"""
 
         // backpressure: api limit is 5 req/sec.
-        do! Async.Sleep 50
+        do! Async.Sleep 100
         client.SendMessage req |> Async.AwaitTask |> Async.RunSynchronously
         Async.Start (sendAlert (), tokenSource.Token)
         return! loop ()
