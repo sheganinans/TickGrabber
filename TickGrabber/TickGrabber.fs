@@ -44,9 +44,9 @@ let commit (dir : string) =
 let push () =
   printfn "push"
   let startInfo = ProcessStartInfo ()
-  startInfo.FileName <- "/bin/bash"
+  startInfo.FileName <- "git"
   let pw = Environment.GetEnvironmentVariable "HUGGING_FACE_PW"
-  startInfo.Arguments <- $"git push https://sheganinans:{pw}@huggingface.co/datasets/sheganinans/TickData" 
+  startInfo.Arguments <- $"push https://sheganinans:{pw}@huggingface.co/datasets/sheganinans/TickData" 
   let proc = new Process ()
   proc.StartInfo <- startInfo
   proc.Start () |> ignore
@@ -147,7 +147,7 @@ let symbolInfo =
     return info |> Array.map (fun s -> s.SymbolId, s) |> Map.ofArray
   } |> Async.RunSynchronously
 
-let firstDay = DateTime (2018, 1, 1)
+let firstDay = DateTime (2023, 7, 28)
 let lastDay = DateTime (2023, 8, 1)
 let mutable date = firstDay
 let mutable symbol = ""
@@ -259,8 +259,8 @@ let saver =
             push ()
             delDir d
             let startInfo = ProcessStartInfo ()
-            startInfo.FileName <- "/bin/bash"
-            startInfo.Arguments <- "git gc --aggressive" 
+            startInfo.FileName <- "git"
+            startInfo.Arguments <- "gc --aggressive" 
             let proc = new Process ()
             proc.StartInfo <- startInfo
             proc.Start () |> ignore
