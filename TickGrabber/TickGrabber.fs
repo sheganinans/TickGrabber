@@ -82,7 +82,7 @@ let acc_id = int64 <| Environment.GetEnvironmentVariable "CTRADER_API_ACCOUNT_ID
 let inline private sub<'t> (client : OpenClient) (f : 't -> unit) =
   (unbox<IObservable<_>> client).OfType<'t>().Subscribe f
 
-let newClient () =
+let client =
   async {
     let client = new OpenClient (ApiInfo.DemoHost, ApiInfo.Port, TimeSpan.FromSeconds 10, useWebSocket = false)
     do! client.Connect () |> Async.AwaitTask
@@ -117,7 +117,6 @@ then
 let symbols =
   async {
     let mutable symbols = [||]
-    use client = newClient ()
 
     sub client (fun (rsp : ProtoOASymbolsListRes) ->
       printfn $"# of symbols: {rsp.Symbol.Count}"
@@ -136,7 +135,6 @@ Thread.Sleep 100
 let symbolInfo =
   async {
     let mutable info = [||]
-    use client = newClient ()
 
     sub client (fun (rsp : ProtoOASymbolByIdRes) -> info <- rsp.Symbol |> Seq.toArray) |> ignore
 
@@ -161,36 +159,32 @@ type GrabReq =
   | NewDay
   | OffsetBy of int64
 
-let mutable client = newClient ()
-
 let grabber =
   let req = ProtoOAGetTickDataReq ()
   let mutable endFilter = 0L
   MailboxProcessor.Start (fun inbox ->
-    let loop () =
-      async {
-        try
-          while true do
-            match! inbox.Receive () with
-            | NewDay -> endFilter <- int64 (date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
-            | OffsetBy t -> endFilter <- t
+    async {
+      try
+        while true do
+          match! inbox.Receive () with
+          | NewDay -> endFilter <- int64 (date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
+          | OffsetBy t -> endFilter <- t
 
-            req.CtidTraderAccountId <- acc_id
-            req.SymbolId <- symbolId
-            req.FromTimestamp <- int64 (date.Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
-            req.ToTimestamp <- endFilter
-            req.Type <- side
-            printfn $"""grab: {symbolId} {symbol} {side} {date}
-              {DateTimeOffset.FromUnixTimeMilliseconds req.FromTimestamp}
-              {DateTimeOffset.FromUnixTimeMilliseconds req.ToTimestamp}"""
+          req.CtidTraderAccountId <- acc_id
+          req.SymbolId <- symbolId
+          req.FromTimestamp <- int64 (date.Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
+          req.ToTimestamp <- endFilter
+          req.Type <- side
+          printfn $"""grab: {symbolId} {symbol} {side} {date}
+            {DateTimeOffset.FromUnixTimeMilliseconds req.FromTimestamp}
+            {DateTimeOffset.FromUnixTimeMilliseconds req.ToTimestamp}"""
 
-            // backpressure: api limit is 5 req/sec.
-            do! Async.Sleep 210
-            client.SendMessage req |> Async.AwaitTask |> Async.RunSynchronously
-            Async.Start (sendAlert (), tokenSource.Token)
-        with err -> printfn $"{err}"
-      }
-    loop ())
+          // backpressure: api limit is 5 req/sec.
+          do! Async.Sleep 210
+          client.SendMessage req |> Async.AwaitTask |> Async.RunSynchronously
+          Async.Start (sendAlert (), tokenSource.Token)
+      with err -> printfn $"{err}"
+    })
 
 type SymbolMsg =
   | Init of ProtoOALightSymbol []
@@ -200,82 +194,69 @@ let symbolMgr =
   MailboxProcessor.Start (fun inbox ->
     let mutable i = 0
     let mutable symbols = [||]
-    let loop () =
-      async {
-        try
-          while true do
-            match! inbox.Receive () with
-            | Init syms ->
-              symbols <- syms
-            | Next ->
-              if i = symbols.Length
-              then printfn "done!"
-              else
-                symbol <- symbols[i].SymbolName
-                symbolId <- symbols[i].SymbolId
-                i <- i + 1
-                grabber.Post NewDay
-        with err -> printfn $"{err}"
-      }
-    loop ())
+    async {
+      try
+        while true do
+          match! inbox.Receive () with
+          | Init syms ->
+            symbols <- syms
+          | Next ->
+            if i = symbols.Length
+            then printfn "done!"
+            else
+              symbol <- symbols[i].SymbolName
+              symbolId <- symbols[i].SymbolId
+              i <- i + 1
+              grabber.Post NewDay
+      with err -> printfn $"{err}"
+    })
 
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
-let rec saver =
-  sub client onTickData |> ignore
-  let mutable i = 0
+let saver =
   MailboxProcessor.Start (fun inbox ->
-    let loop () =
-      async {
-        try
-          while true do
-            do! inbox.Receive ()
-            i <- i + 1
-            if i = 50
-            then
-              i <- 0
-              client.Dispose ()
-              client <- newClient ()
-              sub client onTickData |> ignore
-            if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
-            let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
-            let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
-            let filePath = @$"{repoPath}/{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
-            use file = new ParquetFileWriter (filePath, cols)
-            use rowGroup = file.AppendRowGroup ()
-            let dataDedup =
-              data
-              |> Array.mapi (fun i x -> i, x)
-              |> Array.filter (fun  (i, x) -> if (i + 1) < data.Length then x <> data[i+1] else true)
-              |> Array.map snd
-            use w = rowGroup.NextColumn().LogicalWriter<int64>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Timestamp))
-            use w = rowGroup.NextColumn().LogicalWriter<float>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Tick))
-            file.Close ()
-            file.Dispose ()
-            printfn $"~~~\n{filePath}\n~~~\nsaved\n~~~"
-            data <- [||]
-            if date = lastDay
-            then
-              let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
-              addFile $"{repoPath}/finished.txt"
-              let d = $"{repoPath}/{symbolId}"
-              addDir d
-              commit d
-              push ()
-              delDir d
-              date <- firstDay
-              symbolMgr.Post Next
-            else
-              match side with
-              | ProtoOAQuoteType.Bid -> side <- ProtoOAQuoteType.Ask
-              | ProtoOAQuoteType.Ask -> side <- ProtoOAQuoteType.Bid; date <- date.AddDays 1
-              | _ -> raise (Exception "this should never happen.")
-              grabber.Post NewDay
-        with err -> printfn $"{err}"
-      }
-    loop ())
+    async {
+      try
+        while true do
+          do! inbox.Receive ()
+          if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
+          let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
+          let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
+          let filePath = @$"{repoPath}/{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
+          use file = new ParquetFileWriter (filePath, cols)
+          use rowGroup = file.AppendRowGroup ()
+          let dataDedup =
+            data
+            |> Array.mapi (fun i x -> i, x)
+            |> Array.filter (fun  (i, x) -> if (i + 1) < data.Length then x <> data[i+1] else true)
+            |> Array.map snd
+          use w = rowGroup.NextColumn().LogicalWriter<int64>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Timestamp))
+          use w = rowGroup.NextColumn().LogicalWriter<float>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Tick))
+          file.Close ()
+          file.Dispose ()
+          printfn $"~~~\n{filePath}\n~~~\nsaved\n~~~"
+          data <- [||]
+          if date = lastDay
+          then
+            let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
+            addFile $"{repoPath}/finished.txt"
+            let d = $"{repoPath}/{symbolId}"
+            addDir d
+            commit d
+            push ()
+            delDir d
+            date <- firstDay
+            symbolMgr.Post Next
+          else
+            match side with
+            | ProtoOAQuoteType.Bid -> side <- ProtoOAQuoteType.Ask
+            | ProtoOAQuoteType.Ask -> side <- ProtoOAQuoteType.Bid; date <- date.AddDays 1
+            | _ -> raise (Exception "this should never happen.")
+            grabber.Post NewDay
+      with err -> printfn $"{err}"
+    })
 
-and onTickData (rsp : ProtoOAGetTickDataRes) =
+let onTickData (rsp : ProtoOAGetTickDataRes) =
   printfn $"rec'd ticks: {rsp.TickData.Count}, {rsp.HasMore}"
   tokenSource.Cancel ()
   if rsp.TickData.Count = 0
@@ -298,6 +279,7 @@ and onTickData (rsp : ProtoOAGetTickDataRes) =
     then grabber.Post (OffsetBy data[0].Timestamp)
     else saver.Post ()
 
+sub client onTickData |> ignore
 
 symbolMgr.Post (Init symbols)
 symbolMgr.Post Next
