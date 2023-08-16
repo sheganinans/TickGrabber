@@ -44,6 +44,7 @@ let commit (dir : string) =
 let push () =
   printfn "push"
   let startInfo = ProcessStartInfo ()
+  startInfo.WorkingDirectory <- repoPath
   startInfo.FileName <- "git"
   let pw = Environment.GetEnvironmentVariable "HUGGING_FACE_PW"
   startInfo.Arguments <- $"push https://sheganinans:{pw}@huggingface.co/datasets/sheganinans/TickData" 
@@ -259,6 +260,7 @@ let saver =
             push ()
             delDir d
             let startInfo = ProcessStartInfo ()
+            startInfo.WorkingDirectory <- repoPath
             startInfo.FileName <- "git"
             startInfo.Arguments <- "gc --aggressive" 
             let proc = new Process ()
