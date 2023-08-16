@@ -191,6 +191,18 @@ type SymbolMsg =
   | Next
 
 let symbolMgr =
+  let mutable checkedSkip = false
+  let fastForward () =
+    if not checkedSkip
+    then
+      checkedSkip <- true
+      let fs =
+        Directory.GetFiles $"{repoPath}/{symbolId}"
+        |> Array.filter (fun f -> not (f.Contains ".git"))
+      if fs.Length <> 0
+      then
+        let p = (((fs |> Array.last).Split('/')[3]).Split('.')[0]).Split '-'
+        date <- DateTime (int p[0], int p[1], int p[2])
   MailboxProcessor.Start (fun inbox ->
     let mutable i = 0
     let mutable symbols = [||]
@@ -206,6 +218,7 @@ let symbolMgr =
             else
               symbol <- symbols[i].SymbolName
               symbolId <- symbols[i].SymbolId
+              fastForward ()
               i <- i + 1
               grabber.Post NewDay
       with err -> printfn $"{err}"
