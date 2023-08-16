@@ -82,7 +82,7 @@ let acc_id = int64 <| Environment.GetEnvironmentVariable "CTRADER_API_ACCOUNT_ID
 let inline private sub<'t> (client : OpenClient) (f : 't -> unit) =
   (unbox<IObservable<_>> client).OfType<'t>().Subscribe f
 
-let client =
+let newClient () =
   async {
     let client = new OpenClient (ApiInfo.DemoHost, ApiInfo.Port, TimeSpan.FromSeconds 10, useWebSocket = false)
     do! client.Connect () |> Async.AwaitTask
@@ -117,6 +117,7 @@ then
 let symbols =
   async {
     let mutable symbols = [||]
+    use client = newClient ()
 
     sub client (fun (rsp : ProtoOASymbolsListRes) ->
       printfn $"# of symbols: {rsp.Symbol.Count}"
@@ -135,6 +136,7 @@ Thread.Sleep 100
 let symbolInfo =
   async {
     let mutable info = [||]
+    use client = newClient ()
 
     sub client (fun (rsp : ProtoOASymbolByIdRes) -> info <- rsp.Symbol |> Seq.toArray) |> ignore
 
@@ -158,6 +160,8 @@ let tokenSource = new CancellationTokenSource ()
 type GrabReq =
   | NewDay
   | OffsetBy of int64
+
+let mutable client = newClient ()
 
 let grabber =
   let req = ProtoOAGetTickDataReq ()
@@ -217,12 +221,21 @@ let symbolMgr =
 
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
-let saver =
+let rec saver =
+  sub client onTickData |> ignore
+  let mutable i = 0
   MailboxProcessor.Start (fun inbox ->
     let loop () =
       async {
         try
           while true do
+            i <- i + 1
+            if i = 50
+            then
+              i <- 0
+              client.Dispose ()
+              client <- newClient ()
+              sub client onTickData |> ignore
             do! inbox.Receive ()
             if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
             let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
@@ -262,7 +275,7 @@ let saver =
       }
     loop ())
 
-let onTickData (rsp : ProtoOAGetTickDataRes) =
+and onTickData (rsp : ProtoOAGetTickDataRes) =
   printfn $"rec'd ticks: {rsp.TickData.Count}, {rsp.HasMore}"
   tokenSource.Cancel ()
   if rsp.TickData.Count = 0
@@ -285,7 +298,6 @@ let onTickData (rsp : ProtoOAGetTickDataRes) =
     then grabber.Post (OffsetBy data[0].Timestamp)
     else saver.Post ()
 
-sub client onTickData |> ignore
 
 symbolMgr.Post (Init symbols)
 symbolMgr.Post Next
