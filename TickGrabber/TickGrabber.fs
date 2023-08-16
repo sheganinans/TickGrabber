@@ -185,7 +185,7 @@ let grabber =
               {DateTimeOffset.FromUnixTimeMilliseconds req.ToTimestamp}"""
 
             // backpressure: api limit is 5 req/sec.
-            do! Async.Sleep 120
+            do! Async.Sleep 210
             client.SendMessage req |> Async.AwaitTask |> Async.RunSynchronously
             Async.Start (sendAlert (), tokenSource.Token)
         with err -> printfn $"{err}"
@@ -229,6 +229,7 @@ let rec saver =
       async {
         try
           while true do
+            do! inbox.Receive ()
             i <- i + 1
             if i = 50
             then
@@ -236,7 +237,6 @@ let rec saver =
               client.Dispose ()
               client <- newClient ()
               sub client onTickData |> ignore
-            do! inbox.Receive ()
             if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
             let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
             let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
