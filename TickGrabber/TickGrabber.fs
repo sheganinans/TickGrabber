@@ -1,4 +1,5 @@
 ﻿open System
+open System.Diagnostics
 open System.IO
 open System.Reactive.Linq
 open System.Threading
@@ -40,18 +41,16 @@ let commit (dir : string) =
     repo.Commit ($"added: {dir[repoPath.Length+1..]}", signature, signature) |> ignore
   with _ -> printfn "nothing to commit."
 
-let creds =
-  let c = UsernamePasswordCredentials ()
-  c.Username <- "sheganinans@gmail.com"
-  c.Password <- Environment.GetEnvironmentVariable "HUGGING_FACE_PW"
-  c
-
 let push () =
   printfn "push"
-  use repo = new Repository (repoPath)
-  let options = PushOptions ()
-  options.CredentialsProvider <- CredentialsHandler (fun _ _ _ -> creds)
-  repo.Network.Push (repo.Network.Remotes["origin"], "refs/heads/main", options)
+  let startInfo = ProcessStartInfo ()
+  startInfo.FileName <- "/bin/bash"
+  let pw = Environment.GetEnvironmentVariable "HUGGING_FACE_PW"
+  startInfo.Arguments <- $"git push https://sheganinans:{pw}@huggingface.co/datasets/sheganinans/TickData" 
+  let proc = new Process ()
+  proc.StartInfo <- startInfo
+  proc.Start () |> ignore
+  proc.WaitForExit ()
 
 let delDir (d : string) =
   Directory.GetFiles d |> Array.iter (fun f -> (FileInfo f).Delete ())
@@ -259,6 +258,13 @@ let saver =
             commit d
             push ()
             delDir d
+            let startInfo = ProcessStartInfo ()
+            startInfo.FileName <- "/bin/bash"
+            startInfo.Arguments <- "git gc --aggressive" 
+            let proc = new Process ()
+            proc.StartInfo <- startInfo
+            proc.Start () |> ignore
+            proc.WaitForExit ()
             let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
             date <- firstDay
             symbolMgr.Post Next
