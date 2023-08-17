@@ -24,7 +24,6 @@ let sendAlert =
 
   fun (m : string) ->
     async {
-      do! Async.Sleep 60_000
       do!
         discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"@everyone\n```{m}\n```"
         |> Async.AwaitTask
