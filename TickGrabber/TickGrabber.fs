@@ -3,55 +3,17 @@ open System.Diagnostics
 open System.IO
 open System.Reactive.Linq
 open System.Threading
-open System.Threading.Tasks
 
+open Amazon.S3
+open Amazon.S3.Transfer
+open Amazon.Runtime
 open Discord
 open Discord.WebSocket
-open LibGit2Sharp
-open LibGit2Sharp.Handlers
 open OpenAPI.Net
 open OpenAPI.Net.Helpers
 open ParquetSharp
 
 let repoPath = "../TickData"
-
-let addFile (f : string) =
-  printfn $"add file: {f}"
-  use repo = new Repository (repoPath)
-  let f = f[repoPath.Length+1..]
-  printfn $"{f}"
-  repo.Index.Add f
-  repo.Index.Write ()
-
-let addDir (d : string) =
-  printfn $"add dir: {d}"
-  use repo = new Repository (repoPath)
-  Directory.GetFiles d
-  |> Array.iter (fun f ->
-    let f = f[repoPath.Length+1..]
-    printfn $"{f}"
-    repo.Index.Add f)
-  repo.Index.Write ()
-
-let commit (dir : string) =
-  printfn "commit"
-  use repo = new Repository (repoPath)
-  let signature = Signature ("upload bot", "sheganinans@gmail.com", DateTimeOffset.Now)
-  try
-    repo.Commit ($"added: {dir[repoPath.Length+1..]}", signature, signature) |> ignore
-  with _ -> printfn "nothing to commit."
-
-let push () =
-  printfn "push"
-  let startInfo = ProcessStartInfo ()
-  startInfo.WorkingDirectory <- repoPath
-  startInfo.FileName <- "git"
-  let pw = Environment.GetEnvironmentVariable "HUGGING_FACE_PW"
-  startInfo.Arguments <- $"push https://sheganinans:{pw}@huggingface.co/datasets/sheganinans/TickData" 
-  let proc = new Process ()
-  proc.StartInfo <- startInfo
-  proc.Start () |> ignore
-  proc.WaitForExit ()
 
 let delDir (d : string) =
   Directory.GetFiles d |> Array.iter (fun f -> (FileInfo f).Delete ())
@@ -67,11 +29,11 @@ let sendAlert =
   discord.StartAsync () |> Async.AwaitTask |> Async.RunSynchronously
   Thread.Sleep 3_000
 
-  fun () ->
+  fun (m : string) ->
     async {
       do! Async.Sleep 60_000
       do!
-        discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync "@everyone Did not receive response in over a minute."
+        discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"@everyone\n```{m}\n```"
         |> Async.AwaitTask
         |> Async.Ignore
     }
@@ -106,13 +68,17 @@ let client =
 
 Thread.Sleep 100
 
-if not (Directory.Exists repoPath)
-then Directory.CreateDirectory repoPath |> ignore
-
+if not (Directory.Exists repoPath) then Directory.CreateDirectory repoPath |> ignore
 
 if not (File.Exists $"{repoPath}/finished.txt")
 then
-  let f = File.Create $"{repoPath}/finished.txt"
+  use f = File.Create $"{repoPath}/finished.txt"
+  f.Flush ()
+  f.Close ()
+  
+if not (File.Exists $"{repoPath}/date.txt")
+then
+  use f = File.Create $"{repoPath}/date.txt"
   f.Flush ()
   f.Close ()
 
@@ -134,6 +100,14 @@ let symbols =
 
 Thread.Sleep 100
 
+printfn "writing file"
+let writeFile () =
+  use sw = new StreamWriter ("./tickers.tsv")
+  sw.WriteLine "id\tnane\tdescrip"
+  symbols |> Array.iter (fun i -> sw.WriteLine $"{i.SymbolId}\t{i.SymbolName}\t{i.Description}")
+
+//writeFile ()
+
 let symbolInfo =
   async {
     let mutable info = [||]
@@ -154,8 +128,6 @@ let mutable date = firstDay
 let mutable symbol = ""
 let mutable symbolId = 0L
 let mutable side = ProtoOAQuoteType.Bid
-
-let tokenSource = new CancellationTokenSource ()
 
 type GrabReq =
   | NewDay
@@ -183,9 +155,8 @@ let grabber =
 
           // backpressure: api limit is 5 req/sec.
           do! Async.Sleep 210
-          client.SendMessage req |> Async.AwaitTask |> Async.RunSynchronously
-          Async.Start (sendAlert (), tokenSource.Token)
-      with err -> printfn $"{err}"
+          if not <| (client.SendMessage req).Wait 60_000 then do! sendAlert "Did not receive response in over a minute."
+      with err -> do! sendAlert $"{err}"
     })
 
 type SymbolMsg =
@@ -198,13 +169,11 @@ let symbolMgr =
     if not checkedSkip
     then
       checkedSkip <- true
-      let fs =
-        Directory.GetFiles $"{repoPath}/{symbolId}"
-        |> Array.filter (fun f -> not (f.Contains ".git"))
-      if fs.Length <> 0
-      then
-        let p = (((fs |> Array.last).Split('/')[3]).Split('.')[0]).Split '-'
-        date <- DateTime (int p[0], int p[1], int p[2])
+      File.ReadLines $"{repoPath}/date.txt"
+      |> Seq.tryHead
+      |> Option.iter (fun s ->
+        (try Some (DateTime.Parse s) with _ -> None)
+        |> Option.iter (fun dt -> date <- dt))
   MailboxProcessor.Start (fun inbox ->
     let mutable i = 0
     let mutable symbols = [||]
@@ -223,12 +192,19 @@ let symbolMgr =
               fastForward ()
               i <- i + 1
               grabber.Post NewDay
-      with err -> printfn $"{err}"
+      with err -> do! sendAlert $"{err}"
     })
 
+let uploadFile (file : string) (bucket : string) (key : string) =
+  let creds = BasicAWSCredentials ("", "")
+  use s3 = new AmazonS3Client (creds, Amazon.RegionEndpoint.USEast1)
+  let u = new TransferUtility (s3)
+  u.Upload (file, bucket, key)
+  
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
 let saver =
+  let uploadFile = uploadFile "tmp.parquet" "tick-data"
   MailboxProcessor.Start (fun inbox ->
     async {
       try
@@ -237,8 +213,7 @@ let saver =
           if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
           let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
           let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
-          let filePath = @$"{repoPath}/{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
-          use file = new ParquetFileWriter (filePath, cols)
+          use file = new ParquetFileWriter ("tmp.parquet", cols)
           use rowGroup = file.AppendRowGroup ()
           let dataDedup =
             data
@@ -249,39 +224,30 @@ let saver =
           use w = rowGroup.NextColumn().LogicalWriter<float>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Tick))
           file.Close ()
           file.Dispose ()
-          printfn $"~~~\n{filePath}\n~~~\nsaved\n~~~"
+          let bucketKey = @$"{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
+          uploadFile bucketKey
+          printfn $"~~~\n{bucketKey}\n~~~\nsaved\n~~~"
+          (FileInfo "tmp.parquet").Delete ()
           data <- [||]
           if date = lastDay
           then
-            addFile $"{repoPath}/finished.txt"
-            let d = $"{repoPath}/{symbolId}"
-            addDir d
-            commit d
-            push ()
-            delDir d
-            let startInfo = ProcessStartInfo ()
-            startInfo.WorkingDirectory <- repoPath
-            startInfo.FileName <- "git"
-            startInfo.Arguments <- "gc --aggressive" 
-            let proc = new Process ()
-            proc.StartInfo <- startInfo
-            proc.Start () |> ignore
-            proc.WaitForExit ()
             let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
             date <- firstDay
             symbolMgr.Post Next
           else
             match side with
             | ProtoOAQuoteType.Bid -> side <- ProtoOAQuoteType.Ask
-            | ProtoOAQuoteType.Ask -> side <- ProtoOAQuoteType.Bid; date <- date.AddDays 1
+            | ProtoOAQuoteType.Ask ->
+              side <- ProtoOAQuoteType.Bid
+              File.WriteAllText ($"{repoPath}/date.txt", date.ToString ())
+              date <- date.AddDays 1
             | _ -> raise (Exception "this should never happen.")
             grabber.Post NewDay
-      with err -> printfn $"{err}"
+      with err -> do! sendAlert $"{err}"
     })
 
 let onTickData (rsp : ProtoOAGetTickDataRes) =
   printfn $"rec'd ticks: {rsp.TickData.Count}, {rsp.HasMore}"
-  tokenSource.Cancel ()
   if rsp.TickData.Count = 0
   then saver.Post ()
   else
