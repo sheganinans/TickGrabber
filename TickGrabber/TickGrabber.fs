@@ -66,7 +66,7 @@ then
   use f = File.Create $"./finished.txt"
   f.Flush ()
   f.Close ()
-  
+
 if not (File.Exists $"./date.txt")
 then
   use f = File.Create $"./date.txt"
@@ -175,7 +175,7 @@ let symbolMgr =
             symbols <- syms
           | Next ->
             if i = symbols.Length
-            then printfn "done!"
+            then do! sendAlert "done!"
             else
               symbol <- symbols[i].SymbolName
               symbolId <- symbols[i].SymbolId
@@ -194,7 +194,7 @@ let uploadFile (file : string) (bucket : string) (key : string) =
     use u = new TransferUtility (s3)
     u.Upload (file, bucket, key)
   else sendAlert "failed to login to upload file." |> Async.Start
-    
+
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
 let saver =
