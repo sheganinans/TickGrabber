@@ -60,17 +60,8 @@ let client =
 
 Thread.Sleep 100
 
-if not (File.Exists $"./finished.txt")
-then
-  use f = File.Create $"./finished.txt"
-  f.Flush ()
-  f.Close ()
-
-if not (File.Exists $"./date.txt")
-then
-  use f = File.Create $"./date.txt"
-  f.Flush ()
-  f.Close ()
+if not <| File.Exists $"./finished.txt" then (File.Create $"./finished.txt").Close ()
+if not <| File.Exists $"./date.txt" then (File.Create $"./date.txt").Close ()
 
 let symbols =
   async {
@@ -83,7 +74,7 @@ let symbols =
     let req = ProtoOASymbolsListReq ()
     req.CtidTraderAccountId <- acc_id
     do! client.SendMessage req |> Async.AwaitTask
-    while symbols.Length = 0 do do! Async.Sleep 1_000
+    while symbols.Length = 0 do do! Async.Sleep 100
     let skipSymbols = File.ReadLines $"./finished.txt" |> Seq.filter (fun s -> s <> "") |> Seq.map int64 |> Set.ofSeq
     return symbols |> Array.filter (fun s -> not <| skipSymbols.Contains s.SymbolId)
   } |> Async.RunSynchronously
@@ -107,7 +98,7 @@ let symbolInfo =
     req.CtidTraderAccountId <- acc_id
     symbols |> Array.iter (fun s -> req.SymbolId.Add s.SymbolId)
     do! client.SendMessage req  |> Async.AwaitTask
-    while info.Length = 0 do do! Async.Sleep 1_000
+    while info.Length = 0 do do! Async.Sleep 100
     return info |> Array.map (fun s -> s.SymbolId, s) |> Map.ofArray
   } |> Async.RunSynchronously
 
@@ -143,7 +134,7 @@ let grabber =
             {DateTimeOffset.FromUnixTimeMilliseconds req.ToTimestamp}"""
 
           // backpressure: api limit is 5 req/sec.
-          do! Async.Sleep 210
+          do! Async.Sleep 170
           if not <| (client.SendMessage req).Wait 60_000 then do! sendAlert "Did not receive response in over a minute."
       with err -> do! sendAlert $"{err}"
     })
