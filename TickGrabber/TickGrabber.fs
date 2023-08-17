@@ -1,5 +1,4 @@
 ﻿open System
-open System.Diagnostics
 open System.IO
 open System.Reactive.Linq
 open System.Threading
@@ -7,18 +6,11 @@ open System.Threading
 open Amazon.Runtime.CredentialManagement
 open Amazon.S3
 open Amazon.S3.Transfer
-open Amazon.Runtime
 open Discord
 open Discord.WebSocket
 open OpenAPI.Net
 open OpenAPI.Net.Helpers
 open ParquetSharp
-
-let repoPath = "../TickData"
-
-let delDir (d : string) =
-  Directory.GetFiles d |> Array.iter (fun f -> (FileInfo f).Delete ())
-  (DirectoryInfo d).Delete ()
 
 let sendAlert =
   printfn "logging into discord."
@@ -69,17 +61,15 @@ let client =
 
 Thread.Sleep 100
 
-if not (Directory.Exists repoPath) then Directory.CreateDirectory repoPath |> ignore
-
-if not (File.Exists $"{repoPath}/finished.txt")
+if not (File.Exists $"./finished.txt")
 then
-  use f = File.Create $"{repoPath}/finished.txt"
+  use f = File.Create $"./finished.txt"
   f.Flush ()
   f.Close ()
   
-if not (File.Exists $"{repoPath}/date.txt")
+if not (File.Exists $"./date.txt")
 then
-  use f = File.Create $"{repoPath}/date.txt"
+  use f = File.Create $"./date.txt"
   f.Flush ()
   f.Close ()
 
@@ -95,7 +85,7 @@ let symbols =
     req.CtidTraderAccountId <- acc_id
     do! client.SendMessage req |> Async.AwaitTask
     while symbols.Length = 0 do do! Async.Sleep 1_000
-    let skipSymbols = File.ReadLines $"{repoPath}/finished.txt" |> Seq.filter (fun s -> s <> "") |> Seq.map int64 |> Set.ofSeq
+    let skipSymbols = File.ReadLines $"./finished.txt" |> Seq.filter (fun s -> s <> "") |> Seq.map int64 |> Set.ofSeq
     return symbols |> Array.filter (fun s -> not <| skipSymbols.Contains s.SymbolId)
   } |> Async.RunSynchronously
 
@@ -169,7 +159,7 @@ let symbolMgr =
     if not checkedSkip
     then
       checkedSkip <- true
-      File.ReadLines $"{repoPath}/date.txt"
+      File.ReadLines $"./date.txt"
       |> Seq.tryHead
       |> Option.iter (fun s ->
         (try Some (DateTime.Parse s) with _ -> None)
@@ -235,7 +225,7 @@ let saver =
           data <- [||]
           if date = lastDay
           then
-            let _ = (use w = File.AppendText $"{repoPath}/finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
+            let _ = (use w = File.AppendText $"./finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
             date <- firstDay
             symbolMgr.Post Next
           else
@@ -243,7 +233,7 @@ let saver =
             | ProtoOAQuoteType.Bid -> side <- ProtoOAQuoteType.Ask
             | ProtoOAQuoteType.Ask ->
               side <- ProtoOAQuoteType.Bid
-              File.WriteAllText ($"{repoPath}/date.txt", date.ToString ())
+              File.WriteAllText ($"./date.txt", date.ToString ())
               date <- date.AddDays 1
             | _ -> raise (Exception "this should never happen.")
             grabber.Post NewDay
