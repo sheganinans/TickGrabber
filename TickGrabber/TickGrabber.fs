@@ -4,6 +4,7 @@ open System.IO
 open System.Reactive.Linq
 open System.Threading
 
+open Amazon.Runtime.CredentialManagement
 open Amazon.S3
 open Amazon.S3.Transfer
 open Amazon.Runtime
@@ -100,7 +101,6 @@ let symbols =
 
 Thread.Sleep 100
 
-printfn "writing file"
 let writeFile () =
   use sw = new StreamWriter ("./tickers.tsv")
   sw.WriteLine "id\tnane\tdescrip"
@@ -196,24 +196,28 @@ let symbolMgr =
     })
 
 let uploadFile (file : string) (bucket : string) (key : string) =
-  let creds = BasicAWSCredentials ("", "")
-  use s3 = new AmazonS3Client (creds, Amazon.RegionEndpoint.USEast1)
-  let u = new TransferUtility (s3)
-  u.Upload (file, bucket, key)
-  
+  let chain = CredentialProfileStoreChain ()
+  let res, creds = chain.TryGetAWSCredentials "default"
+  if res
+  then
+    use s3 = new AmazonS3Client (creds, Amazon.RegionEndpoint.USEast1)
+    use u = new TransferUtility (s3)
+    u.Upload (file, bucket, key)
+  else sendAlert "failed to login to upload file." |> Async.Start
+    
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
 let saver =
-  let uploadFile = uploadFile "tmp.parquet" "tick-data"
+  let uploadFile = uploadFile "tmp.parquet" "tick-data-sheganinans"
   MailboxProcessor.Start (fun inbox ->
     async {
       try
         while true do
           do! inbox.Receive ()
-          if not (Directory.Exists $"{repoPath}/{symbolId}") then Directory.CreateDirectory $"{repoPath}/{symbolId}" |> ignore
+          printfn "saving"
           let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
           let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
-          use file = new ParquetFileWriter ("tmp.parquet", cols)
+          use file = new ParquetFileWriter ("./tmp.parquet", cols)
           use rowGroup = file.AppendRowGroup ()
           let dataDedup =
             data
@@ -227,7 +231,7 @@ let saver =
           let bucketKey = @$"{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
           uploadFile bucketKey
           printfn $"~~~\n{bucketKey}\n~~~\nsaved\n~~~"
-          (FileInfo "tmp.parquet").Delete ()
+          (FileInfo "./tmp.parquet").Delete ()
           data <- [||]
           if date = lastDay
           then
