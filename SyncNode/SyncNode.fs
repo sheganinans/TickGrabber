@@ -11,8 +11,6 @@ let stateFile = "./curr_state.txt"
 if not <| File.Exists "./finished.txt" then (File.Create "./finished.txt").Close ()
 if not <| File.Exists stateFile then (File.Create stateFile).Close ()
 
-//let _ = (use w = File.AppendText "./finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
-
 type     CTId = int64
 type SymbolId = int64
 
@@ -106,10 +104,7 @@ let routes = router {
         if currId <> symbolId
         then json (Err $"unexpected symbol: {symbolId}")
         else
-          finished <- finished.Add symbolId
-          use sw = new StreamWriter "./finished.txt"
-          finished |> Set.iter sw.WriteLine
-          sw.Close ()
+          (use w = File.AppendText "./finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
           i <- i + 1
           currState <- currState.Add (ctid, symbols[i].SymbolId)
           saveCurrState ()
