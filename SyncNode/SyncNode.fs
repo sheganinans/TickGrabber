@@ -22,6 +22,11 @@ let mutable currState : Map<CTId, SymbolId> =
     int64 s[0], int64 s[1])
   |> Map.ofArray
 
+let saveCurrState () =
+  use sw = new StreamWriter "./curr_state.txt"
+  currState |> Map.iter (fun k v -> sw.WriteLine $"{k},{v}")
+  sw.Flush ()
+
 let mutable finished : SymbolId Set =
   (File.ReadAllText "./finished.txt").Split '\n'
   |> Array.filter (fun s -> s <> "")
@@ -80,6 +85,8 @@ let routes = router {
       let ctid = int64 ctid
       match currState |> Map.tryFind ctid with
       | None ->
+        currState <- currState.Add (ctid, symbols[i].SymbolId)
+        saveCurrState ()
         let rsp = currSymbol ()
         i <- i + 1
         rsp
@@ -102,6 +109,8 @@ let routes = router {
           finished |> Set.iter sw.WriteLine
           sw.Close ()
           i <- i + 1
+          currState <- currState.Add (ctid, symbols[i].SymbolId)
+          saveCurrState ()
           currSymbol ()))
 }
 
