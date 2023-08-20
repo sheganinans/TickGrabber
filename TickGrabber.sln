@@ -2,6 +2,10 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "TickGrabber", "TickGrabber\TickGrabber.fsproj", "{4FEE22C0-9971-4463-835B-5AE698AFDE1C}"
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "SyncNode", "SyncNode\SyncNode.fsproj", "{FC95CF38-035A-45FF-BBBC-0E2CE1F53315}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Shared", "Shared\Shared.fsproj", "{5B0D01B8-D5F9-4ADF-A2AB-BFEBFE8C7BCB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -12,5 +16,13 @@ Global
 		{4FEE22C0-9971-4463-835B-5AE698AFDE1C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4FEE22C0-9971-4463-835B-5AE698AFDE1C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4FEE22C0-9971-4463-835B-5AE698AFDE1C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FC95CF38-035A-45FF-BBBC-0E2CE1F53315}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FC95CF38-035A-45FF-BBBC-0E2CE1F53315}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FC95CF38-035A-45FF-BBBC-0E2CE1F53315}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FC95CF38-035A-45FF-BBBC-0E2CE1F53315}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B0D01B8-D5F9-4ADF-A2AB-BFEBFE8C7BCB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B0D01B8-D5F9-4ADF-A2AB-BFEBFE8C7BCB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B0D01B8-D5F9-4ADF-A2AB-BFEBFE8C7BCB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B0D01B8-D5F9-4ADF-A2AB-BFEBFE8C7BCB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

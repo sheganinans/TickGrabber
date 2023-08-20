@@ -1,117 +1,60 @@
 ﻿open System
 open System.IO
-open System.Reactive.Linq
+open System.Net.Http
+open System.Net.Http.Json
 open System.Threading
 
 open Amazon.Runtime.CredentialManagement
 open Amazon.S3
 open Amazon.S3.Transfer
-open Discord
-open Discord.WebSocket
-open OpenAPI.Net
-open OpenAPI.Net.Helpers
+open Newtonsoft.Json
 open ParquetSharp
 
-let sendAlert =
-  printfn "logging into discord."
-  let discord = new DiscordSocketClient ()
-  let token =  Environment.GetEnvironmentVariable "DISCORD_TOKEN"
-  let guild = uint64 <| Environment.GetEnvironmentVariable "DISCORD_GUILD"
-  let channel = uint64 <| Environment.GetEnvironmentVariable "DISCORD_CHANNEL"
-  discord.LoginAsync (TokenType.Bot, token) |> Async.AwaitTask |> Async.RunSynchronously
-  discord.StartAsync () |> Async.AwaitTask |> Async.RunSynchronously
-  Thread.Sleep 3_000
+open Shared
 
-  fun (m : string) ->
-    async {
-      do!
-        discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"@everyone\n```{m}\n```"
-        |> Async.AwaitTask
-        |> Async.Ignore
-    }
-
-let client_id = Environment.GetEnvironmentVariable "CTRADER_API_CLIENT_ID"
-let client_secret = Environment.GetEnvironmentVariable "CTRADER_API_CLIENT_SECRET"
-let access_token = Environment.GetEnvironmentVariable "CTRADER_API_CLIENT_ACCESS_TOKEN"
-let acc_id = int64 <| Environment.GetEnvironmentVariable "CTRADER_API_ACCOUNT_ID"
-
-let inline private sub<'t> (client : OpenClient) (f : 't -> unit) =
-  (unbox<IObservable<_>> client).OfType<'t>().Subscribe f
-
-let client =
-  async {
-    let client = new OpenClient (ApiInfo.DemoHost, ApiInfo.Port, TimeSpan.FromSeconds 10, useWebSocket = false)
-    do! client.Connect () |> Async.AwaitTask
-    printfn "connected."
-
-    let applicationAuthReq = ProtoOAApplicationAuthReq ()
-    applicationAuthReq.ClientId <- client_id
-    applicationAuthReq.ClientSecret <- client_secret
-    do! client.SendMessage applicationAuthReq |> Async.AwaitTask
-    do! Async.Sleep 100
-
-    let accountAuthReq = ProtoOAAccountAuthReq ()
-    accountAuthReq.CtidTraderAccountId <- acc_id
-    accountAuthReq.AccessToken <- access_token
-    do! client.SendMessage accountAuthReq  |> Async.AwaitTask
-    printfn "auth completed."
-    return client
-  } |> Async.RunSynchronously
-
-Thread.Sleep 100
-
-if not <| File.Exists $"./finished.txt" then (File.Create $"./finished.txt").Close ()
-if not <| File.Exists $"./date.txt" then (File.Create $"./date.txt").Close ()
-
-let symbols =
-  async {
-    let mutable symbols = [||]
-
-    sub client (fun (rsp : ProtoOASymbolsListRes) ->
-      printfn $"# of symbols: {rsp.Symbol.Count}"
-      symbols <- rsp.Symbol |> Seq.toArray) |> ignore
-
-    let req = ProtoOASymbolsListReq ()
-    req.CtidTraderAccountId <- acc_id
-    do! client.SendMessage req |> Async.AwaitTask
-    while symbols.Length = 0 do do! Async.Sleep 100
-    let skipSymbols = File.ReadLines $"./finished.txt" |> Seq.filter (fun s -> s <> "") |> Seq.map int64 |> Set.ofSeq
-    return symbols |> Array.filter (fun s -> not <| skipSymbols.Contains s.SymbolId)
-  } |> Async.RunSynchronously
-
-Thread.Sleep 100
-
-let writeFile () =
-  use sw = new StreamWriter ("./tickers.tsv")
-  sw.WriteLine "id\tnane\tdescrip"
-  symbols |> Array.iter (fun i -> sw.WriteLine $"{i.SymbolId}\t{i.SymbolName}\t{i.Description}")
-
-//writeFile ()
-
-let symbolInfo =
-  async {
-    let mutable info = [||]
-
-    sub client (fun (rsp : ProtoOASymbolByIdRes) -> info <- rsp.Symbol |> Seq.toArray) |> ignore
-
-    let req = ProtoOASymbolByIdReq ()
-    req.CtidTraderAccountId <- acc_id
-    symbols |> Array.iter (fun s -> req.SymbolId.Add s.SymbolId)
-    do! client.SendMessage req  |> Async.AwaitTask
-    while info.Length = 0 do do! Async.Sleep 100
-    return info |> Array.map (fun s -> s.SymbolId, s) |> Map.ofArray
-  } |> Async.RunSynchronously
+if not <| File.Exists "./date.txt" then (File.Create "./date.txt").Close ()
 
 let firstDay = DateTime (2018, 1, 1)
 let lastDay = DateTime (2023, 8, 1)
 let mutable date = firstDay
+
+File.ReadLines "./date.txt"
+|> Seq.tryHead
+|> Option.iter (fun s ->
+  (try Some (DateTime.Parse s) with _ -> None)
+  |> Option.iter (fun dt -> date <- dt))
+
 let mutable symbol = ""
 let mutable symbolId = 0L
+let mutable roundBy = 4
 let mutable side = ProtoOAQuoteType.Bid
+
+let mutable finished = false
+
+let sync_node = Environment.GetEnvironmentVariable "SYNC_NODE_ADDR"
+
+task {
+  use client = new HttpClient ()
+  let! response = client.GetAsync $"{sync_node}/get-symbol-id/{CTrader.acc_id}"
+  let! c = response.Content.ReadAsStringAsync ()
+  match JsonConvert.DeserializeObject<Msg> c with
+  | SymbolInfo i ->
+    symbol <- i.Symbol
+    symbolId <- i.Id
+    roundBy <- i.Digits
+  | Finished -> finished <- true
+  | Err err ->
+    finished <- true
+    Discord.sendAlert err |> Async.Start
+}
+|> Async.AwaitTask
+|> Async.RunSynchronously
 
 type GrabReq =
   | NewDay
   | OffsetBy of int64
+
+let client = CTrader.getClient ()
 
 let grabber =
   let req = ProtoOAGetTickDataReq ()
@@ -121,12 +64,12 @@ let grabber =
       try
         while true do
           match! inbox.Receive () with
-          | NewDay -> endFilter <- int64 (date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
+          | NewDay -> endFilter <- int64 <| date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds
           | OffsetBy t -> endFilter <- t
 
-          req.CtidTraderAccountId <- acc_id
+          req.CtidTraderAccountId <- CTrader.acc_id
           req.SymbolId <- symbolId
-          req.FromTimestamp <- int64 (date.Subtract(DateTime(1970, 1, 1)).TotalMilliseconds)
+          req.FromTimestamp <- int64 <| date.Subtract(DateTime(1970, 1, 1)).TotalMilliseconds
           req.ToTimestamp <- endFilter
           req.Type <- side
           printfn $"""grab: {symbolId} {symbol} {side} {date}
@@ -135,45 +78,13 @@ let grabber =
 
           // backpressure: api limit is 5 req/sec.
           do! Async.Sleep 170
-          if not <| (client.SendMessage req).Wait 60_000 then do! sendAlert "Did not receive response in over a minute."
-      with err -> do! sendAlert $"{err}"
+          if not <| (client.SendMessage req).Wait 60_000 then do! Discord.sendAlert "Did not receive response in over a minute."
+      with err -> do! Discord.sendAlert $"{err}"
     })
 
 type SymbolMsg =
   | Init of ProtoOALightSymbol []
   | Next
-
-let symbolMgr =
-  let mutable checkedSkip = false
-  let fastForward () =
-    if not checkedSkip
-    then
-      checkedSkip <- true
-      File.ReadLines $"./date.txt"
-      |> Seq.tryHead
-      |> Option.iter (fun s ->
-        (try Some (DateTime.Parse s) with _ -> None)
-        |> Option.iter (fun dt -> date <- dt))
-  MailboxProcessor.Start (fun inbox ->
-    let mutable i = 0
-    let mutable symbols = [||]
-    async {
-      try
-        while true do
-          match! inbox.Receive () with
-          | Init syms ->
-            symbols <- syms
-          | Next ->
-            if i = symbols.Length
-            then do! sendAlert "done!"
-            else
-              symbol <- symbols[i].SymbolName
-              symbolId <- symbols[i].SymbolId
-              fastForward ()
-              i <- i + 1
-              grabber.Post NewDay
-      with err -> do! sendAlert $"{err}"
-    })
 
 let uploadFile (file : string) (bucket : string) (key : string) =
   let chain = CredentialProfileStoreChain ()
@@ -183,7 +94,7 @@ let uploadFile (file : string) (bucket : string) (key : string) =
     use s3 = new AmazonS3Client (creds, Amazon.RegionEndpoint.USEast1)
     use u = new TransferUtility (s3)
     u.Upload (file, bucket, key)
-  else sendAlert "failed to login to upload file." |> Async.Start
+  else Discord.sendAlert "failed to login to upload file." |> Async.Start
 
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
@@ -208,26 +119,42 @@ let saver =
           use w = rowGroup.NextColumn().LogicalWriter<float>() in w.WriteBatch (dataDedup |> Array.map (fun r -> r.Tick))
           file.Close ()
           file.Dispose ()
-          let bucketKey = @$"{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
+          let bucketKey = $"{symbolId}/{date.Year}-%02i{date.Month}-%02i{date.Day}.{prettySide}.parquet"
           uploadFile bucketKey
           printfn $"~~~\n{bucketKey}\n~~~\nsaved\n~~~"
           (FileInfo "./tmp.parquet").Delete ()
           data <- [||]
           if date = lastDay
           then
-            let _ = (use w = File.AppendText $"./finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
+            task {
+              use client = new HttpClient ()
+              let! response =  client.GetAsync $"{sync_node}/finished-job/{CTrader.acc_id}/{symbolId}"
+              let! c = response.Content.ReadAsStringAsync ()
+              match JsonConvert.DeserializeObject<Msg> c with
+              | SymbolInfo i ->
+                symbol <- i.Symbol
+                symbolId <- i.Id
+                roundBy <- i.Digits
+                Discord.sendAlert $"starting: {symbol}" |> Async.Start
+              | Finished -> finished <- true
+              | Err err ->
+                finished <- true
+                Discord.sendAlert err |> Async.Start
+            }
+            |> Async.AwaitTask
+            |> Async.RunSynchronously
             date <- firstDay
-            symbolMgr.Post Next
+            grabber.Post NewDay
           else
             match side with
             | ProtoOAQuoteType.Bid -> side <- ProtoOAQuoteType.Ask
             | ProtoOAQuoteType.Ask ->
               side <- ProtoOAQuoteType.Bid
-              File.WriteAllText ($"./date.txt", date.ToString ())
+              File.WriteAllText ("./date.txt", date.ToString ())
               date <- date.AddDays 1
             | _ -> raise (Exception "this should never happen.")
             grabber.Post NewDay
-      with err -> do! sendAlert $"{err}"
+      with err -> do! Discord.sendAlert $"{err}"
     })
 
 let onTickData (rsp : ProtoOAGetTickDataRes) =
@@ -235,7 +162,6 @@ let onTickData (rsp : ProtoOAGetTickDataRes) =
   if rsp.TickData.Count = 0
   then saver.Post ()
   else
-    let roundBy = symbolInfo[symbolId].Digits
     let ticks = rsp.TickData |> Seq.toArray
     let firstTick = {| Tick = Math.Round (float ticks[0].Tick / 100_000., roundBy); Timestamp = ticks[0].Timestamp |}
     let ticks =
@@ -252,9 +178,8 @@ let onTickData (rsp : ProtoOAGetTickDataRes) =
     then grabber.Post (OffsetBy data[0].Timestamp)
     else saver.Post ()
 
-sub client onTickData |> ignore
+CTrader.sub client onTickData |> ignore
 
-symbolMgr.Post (Init symbols)
-symbolMgr.Post Next
+grabber.Post NewDay
 
 Thread.Sleep -1
