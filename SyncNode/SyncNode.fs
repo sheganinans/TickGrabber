@@ -15,7 +15,7 @@ type     CTId = int64
 type SymbolId = int64
 
 let mutable currState : Map<CTId, SymbolId> =
-  (File.ReadAllText "./finished.txt").Split '\n'
+  (File.ReadAllText "./node_states.txt").Split '\n'
   |> Array.filter (fun s -> s <> "")
   |> Array.map (fun s ->
     let s = s.Split ','
@@ -77,6 +77,7 @@ let currSymbol () =
 let routes = router {
   getf "/get-symbol-id/%i" (fun ctid ->
     lock reqLock (fun () ->
+      let ctid = int64 ctid
       match currState |> Map.tryFind ctid with
       | None ->
         let rsp = currSymbol ()
@@ -89,6 +90,7 @@ let routes = router {
 
   getf "/finished-job/%i/%i" (fun (ctid, symbolId) ->
     lock reqLock (fun () ->
+      let ctid, symbolId = int64 ctid, int64 symbolId
       match currState |> Map.tryFind ctid with
       | None -> json (Err $"did not find ctid: {ctid}")
       | Some currId ->
