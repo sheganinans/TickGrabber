@@ -67,6 +67,8 @@ let grabber =
           | NewDay -> endFilter <- int64 <| date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds
           | OffsetBy t -> endFilter <- t
 
+          if date = firstDay then Discord.sendAlert $"starting: {symbol}" |> Async.Start
+
           req.CtidTraderAccountId <- CTrader.acc_id
           req.SymbolId <- symbolId
           req.FromTimestamp <- int64 <| date.Subtract(DateTime(1970, 1, 1)).TotalMilliseconds
