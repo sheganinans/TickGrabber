@@ -6,7 +6,7 @@ open Saturn
 open Giraffe
 open Shared
 
-let stateFile = "./curr_state"
+let stateFile = "./curr_state.txt"
 
 if not <| File.Exists "./finished.txt" then (File.Create "./finished.txt").Close ()
 if not <| File.Exists stateFile then (File.Create stateFile).Close ()
