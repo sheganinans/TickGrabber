@@ -6,8 +6,10 @@ open Saturn
 open Giraffe
 open Shared
 
+let stateFile = "./curr_state"
+
 if not <| File.Exists "./finished.txt" then (File.Create "./finished.txt").Close ()
-if not <| File.Exists "./node_states.txt" then (File.Create "./node_states.txt").Close ()
+if not <| File.Exists stateFile then (File.Create stateFile).Close ()
 
 //let _ = (use w = File.AppendText "./finished.txt" in w.WriteLine $"{symbolId}"; w.Flush (); w.Close ())
 
@@ -15,7 +17,7 @@ type     CTId = int64
 type SymbolId = int64
 
 let mutable currState : Map<CTId, SymbolId> =
-  (File.ReadAllText "./node_states.txt").Split '\n'
+  (File.ReadAllText stateFile).Split '\n'
   |> Array.filter (fun s -> s <> "")
   |> Array.map (fun s ->
     let s = s.Split ','
@@ -23,7 +25,7 @@ let mutable currState : Map<CTId, SymbolId> =
   |> Map.ofArray
 
 let saveCurrState () =
-  use sw = new StreamWriter "./curr_state.txt"
+  use sw = new StreamWriter (stateFile)
   currState |> Map.iter (fun k v -> sw.WriteLine $"{k},{v}")
   sw.Flush ()
 
