@@ -33,6 +33,8 @@ let mutable finished = false
 
 let sync_node = Environment.GetEnvironmentVariable "SYNC_NODE_ADDR"
 
+Thread.Sleep 1000
+
 task {
   use client = new HttpClient ()
   let! response = client.GetAsync $"{sync_node}/get-symbol-id/{CTrader.acc_id}"
