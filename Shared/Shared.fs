@@ -62,7 +62,7 @@ module Discord =
     fun (m : string) ->
       async {
         do!
-          discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"@{user_id}\n```{m}\n```"
+          discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"<@{user_id}>\n```{m}\n```"
           |> Async.AwaitTask
           |> Async.Ignore
       }
