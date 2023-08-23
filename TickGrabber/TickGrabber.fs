@@ -35,6 +35,8 @@ let sync_node = Environment.GetEnvironmentVariable "SYNC_NODE_ADDR"
 
 Thread.Sleep 1000
 
+let discord = Discord ()
+
 task {
   use client = new HttpClient ()
   let! response = client.GetAsync $"{sync_node}/get-symbol-id/{CTrader.acc_id}"
@@ -47,7 +49,7 @@ task {
   | Finished -> finished <- true
   | Err err ->
     finished <- true
-    Discord.sendAlert err |> Async.Start
+    discord.SendAlert err |> Async.Start
 }
 |> Async.AwaitTask
 |> Async.RunSynchronously
@@ -69,7 +71,7 @@ let grabber =
           | NewDay -> endFilter <- int64 <| date.AddDays(1).Subtract(DateTime(1970, 1, 1)).TotalMilliseconds
           | OffsetBy t -> endFilter <- t
 
-          if date = firstDay && side = ProtoOAQuoteType.Bid then Discord.sendAlert $"starting: {symbol}" |> Async.Start
+          if date = firstDay && side = ProtoOAQuoteType.Bid then discord.SendNotification $"starting: {symbol}" |> Async.Start
 
           req.CtidTraderAccountId <- CTrader.acc_id
           req.SymbolId <- symbolId
@@ -82,8 +84,8 @@ let grabber =
 
           // backpressure: api limit is 5 req/sec.
           do! Async.Sleep 170
-          if not <| (client.SendMessage req).Wait 60_000 then do! Discord.sendAlert "Did not receive response in over a minute."
-      with err -> do! Discord.sendAlert $"{err}"
+          if not <| (client.SendMessage req).Wait 60_000 then do! discord.SendAlert "Did not receive response in over a minute."
+      with err -> do! discord.SendAlert $"{err}"
     })
 
 type SymbolMsg =
@@ -98,7 +100,7 @@ let uploadFile (file : string) (bucket : string) (key : string) =
     use s3 = new AmazonS3Client (creds, Amazon.RegionEndpoint.USEast1)
     use u = new TransferUtility (s3)
     u.Upload (file, bucket, key)
-  else Discord.sendAlert "failed to login to upload file." |> Async.Start
+  else discord.SendAlert "failed to login to upload file." |> Async.Start
 
 let mutable data : {| Tick : float; Timestamp : int64 |} [] = [||]
 
@@ -109,7 +111,6 @@ let saver =
       try
         while true do
           do! inbox.Receive ()
-          printfn "saving"
           let cols : Column [] = [| Column<int64> "timestamp"; Column<float> "tick" |]
           let prettySide = match side with | ProtoOAQuoteType.Ask -> "ask" | _ -> "bid"
           use file = new ParquetFileWriter ("./tmp.parquet", cols)
@@ -139,11 +140,11 @@ let saver =
                 symbol <- i.Symbol
                 symbolId <- i.Id
                 roundBy <- i.Digits
-                Discord.sendAlert $"starting: {symbol}" |> Async.Start
+                discord.SendNotification $"starting: {symbol}" |> Async.Start
               | Finished -> finished <- true
               | Err err ->
                 finished <- true
-                Discord.sendAlert err |> Async.Start
+                discord.SendAlert err |> Async.Start
             }
             |> Async.AwaitTask
             |> Async.RunSynchronously
@@ -158,7 +159,7 @@ let saver =
               date <- date.AddDays 1
             | _ -> raise (Exception "this should never happen.")
             grabber.Post NewDay
-      with err -> do! Discord.sendAlert $"{err}"
+      with err -> do! discord.SendAlert $"{err}"
     })
 
 let onTickData (rsp : ProtoOAGetTickDataRes) =

@@ -40,29 +40,38 @@ module CTrader =
       return client
     } |> Async.RunSynchronously
 
+open System
+open System.Threading
 
-module Discord =
-  open System
-  open System.Threading
+open Discord
+open Discord.WebSocket
 
-  open Discord
-  open Discord.WebSocket
 
-  let sendAlert =
+type Discord () =
+  let discord = new DiscordSocketClient ()
+  let user_id = Environment.GetEnvironmentVariable "DISCORD_USER_ID"
+  let token =  Environment.GetEnvironmentVariable "DISCORD_TOKEN"
+  let guild = uint64 <| Environment.GetEnvironmentVariable "DISCORD_GUILD"
+  let channel = uint64 <| Environment.GetEnvironmentVariable "DISCORD_CHANNEL"
+  do
     printfn "logging into discord."
-    let discord = new DiscordSocketClient ()
-    let user_id = Environment.GetEnvironmentVariable "DISCORD_USER_ID"
-    let token =  Environment.GetEnvironmentVariable "DISCORD_TOKEN"
-    let guild = uint64 <| Environment.GetEnvironmentVariable "DISCORD_GUILD"
-    let channel = uint64 <| Environment.GetEnvironmentVariable "DISCORD_CHANNEL"
     discord.LoginAsync (TokenType.Bot, token) |> Async.AwaitTask |> Async.RunSynchronously
     discord.StartAsync () |> Async.AwaitTask |> Async.RunSynchronously
     Thread.Sleep 3_000
 
-    fun (m : string) ->
-      async {
-        do!
-          discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"<@{user_id}>\n```{m}\n```"
-          |> Async.AwaitTask
-          |> Async.Ignore
-      }
+  member this.SendAlert (m : string) =
+    async {
+      do!
+        discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"<@{user_id}>\n```{m}\n```"
+        |> Async.AwaitTask
+        |> Async.Ignore
+    }
+
+  member this.SendNotification (m : string) =
+    async {
+      do!
+        discord.GetGuild(guild).GetTextChannel(channel).SendMessageAsync $"```{m}\n```"
+        |> Async.AwaitTask
+        |> Async.Ignore   
+    }
+    
